@@ -24,6 +24,7 @@
 //    If statements in the parser match the element order in the schema definition
 
 #include <assert.h>
+#include <math.h>
 #include "libmscore/score.h"
 #include "thirdparty/qzip/qzipreader_p.h"
 #include "capella.h"
@@ -148,9 +149,9 @@ void BasicDurationalObj::readCapx(XmlReader& e, unsigned int& fullm)
 //   BasicDurationalObj::readCapxObjectArray
 //---------------------------------------------------------
 
-void BasicDurationalObj::readCapxObjectArray(XmlReader& e)
+void BasicDurationalObj::readCapxObjectArray(XmlReader& e, bool & griffPush, QList<QString> * griffCross)
       {
-      objects = cap->readCapxDrawObjectArray(e);
+      objects = cap->readCapxDrawObjectArray(e, griffPush, griffCross);
       }
 
 //---------------------------------------------------------
@@ -304,7 +305,7 @@ void ChordObj::readCapxArticulation(XmlReader& e)
 //   ChordObj::readCapx -- capx equivalent of ChordObj::read
 //---------------------------------------------------------
 
-void ChordObj::readCapx(XmlReader& e)
+void ChordObj::readCapx(XmlReader& e, bool & ziachUsed)
       {
       stemDir      = StemDir::AUTO;
       dStemLength  = 0;
@@ -340,10 +341,10 @@ void ChordObj::readCapx(XmlReader& e)
                   readCapxLyrics(e);
                   }
             else if (tag == "drawObjects") {
-                  readCapxObjectArray(e);
+                  readCapxObjectArray(e, griffPush, &griffCross);
                   }
             else if (tag == "heads") {
-                  readCapxNotes(e);
+                  readCapxNotes(e, ziachUsed);
                   }
             else
                   e.unknown();
@@ -409,12 +410,13 @@ void ChordObj::readCapxLyrics(XmlReader& e)
 //   ChordObj::readCapxNotes -- read the notes in a capx chord
 //---------------------------------------------------------
 
-void ChordObj::readCapxNotes(XmlReader& e)
+void ChordObj::readCapxNotes(XmlReader& e, bool ziachUsed)
       {
       while (e.readNextStartElement()) {
             if (e.name() == "head") {
                   QString pitch = e.attribute("pitch");
                   QString sstep;
+                  QString shape = e.attribute("shape");
                   while (e.readNextStartElement()) {
                         const QStringRef& tag(e.name());
                         if (tag == "alter") {
@@ -428,13 +430,22 @@ void ChordObj::readCapxNotes(XmlReader& e)
                         else
                               e.unknown();
                         }
-                  qDebug("ChordObj::readCapxNotes: pitch '%s' altstep '%s'",
-                         qPrintable(pitch), qPrintable(sstep));
+                  qDebug("ChordObj::readCapxNotes: pitch '%s' altstep '%s' shape '%s'",
+                         qPrintable(pitch), qPrintable(sstep), qPrintable(shape));
                   int istep = sstep.toInt();
                   CNote n;
                   n.pitch = pitchStr2Char(pitch);
                   n.explAlteration = 0;
                   n.headType = 0;
+                  n.headGroup = 0;
+                  n.color = 0;
+                  if (shape == "none" || griffCross.indexOf(pitch) >= 0 ||
+                      griffCross.indexOf("x") >= 0)
+                         n.headGroup = int(NoteHead::Group::HEAD_CROSS);
+                  if (!ziachUsed || griffPush)
+                         n.color = 0x000000;
+                  else
+                         n.color = 0x0000ff;
                   n.alteration = istep;
                   n.silent = 0;
                   notes.append(n);
@@ -453,6 +464,7 @@ void RestObj::readCapx(XmlReader& e)
       bVerticalCentered = false;
       fullMeasures = 0;
       vertShift    = 0;
+      bool griffPush = false;
       while (e.readNextStartElement()) {
             const QStringRef& tag(e.name());
             if (tag == "duration") {
@@ -466,7 +478,7 @@ void RestObj::readCapx(XmlReader& e)
                   e.skipCurrentElement();
                   }
             else if (tag == "drawObjects") {
-                  readCapxObjectArray(e);
+                  readCapxObjectArray(e, griffPush);
                   }
             else
                   e.unknown();
@@ -482,6 +494,9 @@ void SimpleTextObj::readCapx(XmlReader& e)
       double x = e.doubleAttribute("x");
       double y = e.doubleAttribute("y");
       QString stralign = e.attribute("align", "left");
+      QString face;
+      QString charSet;
+      QString pitchAndFamily;
       align = 0;
       if (stralign == "center")
             align = 1;
@@ -493,6 +508,9 @@ void SimpleTextObj::readCapx(XmlReader& e)
       while (e.readNextStartElement()) {
             const QStringRef& tag(e.name());
             if (tag == "font") {
+                  face = e.attribute("face");
+                  charSet = e.attribute("charSet");
+                  pitchAndFamily = e.attribute("pitchAndFamily");
                   _font = capxReadFont(e);
                   }
             else if (tag == "content") {
@@ -502,14 +520,31 @@ void SimpleTextObj::readCapx(XmlReader& e)
             else
                   e.unknown();
             }
+      // face = capella2 , charSet = 2, pitchAndFamily = 2
+      // content = T: cross head
+      //           K: rest sign
+      //           y: segno
+      //           o: coda
+      if (_text == "T" && face == "capella3" &&
+          charSet == "2" && pitchAndFamily == "2") {
+            // y =  0.5 : A5
+            // y =    0 : B5
+            // y = -0.5 : C6
+            static const QString pitch[7] = {"C", "D", "E", "F", "G", "A", "B"};
+            int p = - int(round(2.0*y)) - 1 + 6*7;
+            if (p >= 0)
+                griffCross = pitch[p % 7] + QString::number((p / 7));
+            }
+      if (_text == "x" && pitchAndFamily == "34")
+            griffCross = "x";
       }
-
 //---------------------------------------------------------
 //   TransposableObj::readCapx -- capx equivalent of TransposableObj::read
 //---------------------------------------------------------
 
 void TransposableObj::readCapx(XmlReader& e)
       {
+      bool griffPush = false;
       QString enharmonicNote = e.attribute("base");
       while (e.readNextStartElement()) {
             const QStringRef& tag1(e.name());
@@ -518,7 +553,7 @@ void TransposableObj::readCapx(XmlReader& e)
                         while (e.readNextStartElement()) {
                               const QStringRef& tag2(e.name());
                               if (tag2 == "group") {
-                                    variants.append(cap->readCapxDrawObjectArray(e));
+                                    variants.append(cap->readCapxDrawObjectArray(e, griffPush, NULL));
                                     }
                               }
                         }
@@ -602,7 +637,7 @@ void WedgeObj::readCapx(XmlReader& e)
 //   readCapxDrawObjectArray -- capx equivalent of readDrawObjectArray()
 //---------------------------------------------------------
 
-QList<BasicDrawObj*> Capella::readCapxDrawObjectArray(XmlReader& e)
+QList<BasicDrawObj*> Capella::readCapxDrawObjectArray(XmlReader& e, bool & griffPush, QList<QString> * griffCross)
       {
       QList<BasicDrawObj*> ol;
       while (e.readNextStartElement()) {
@@ -618,6 +653,8 @@ QList<BasicDrawObj*> Capella::readCapxDrawObjectArray(XmlReader& e)
                                     e.skipCurrentElement();
                               }
                         else if (tag == "line") {
+                              if (e.attribute("lineWidth") == "0.5")
+                                    griffPush = true;
                               qDebug("readCapxDrawObjectArray: found line (skipping)");
                               e.skipCurrentElement();
                               }
@@ -642,6 +679,10 @@ QList<BasicDrawObj*> Capella::readCapxDrawObjectArray(XmlReader& e)
                               bdo = o; // save o to handle the "basic" tag (which sometimes follows)
                               o->readCapx(e);
                               ol.append(o);
+                              if (griffCross != NULL && o->griffCross != "")
+                                  griffCross->append(o->griffCross);
+                              if (o->_font.family() == "Ziach")
+                                ziachUsed = true;
                               }
                         else if (tag == "richText") {
                               qDebug("readCapxDrawObjectArray: found richText (skipping)");
@@ -694,8 +735,8 @@ QList<BasicDrawObj*> Capella::readCapxDrawObjectArray(XmlReader& e)
                               ol.append(o);
                               }
                         else if (tag == "group") {
-                              qDebug("readCapxDrawObjectArray: found group (skipping)");
-                              e.skipCurrentElement();
+                              // Griffschrift: Bass-Noten als Text z.B. "B" und "b"
+                              ol.append(readCapxDrawObjectArray(e, griffPush, griffCross));
                               }
                         else
                               e.unknown();
@@ -750,7 +791,7 @@ void Capella::readCapxVoice(XmlReader& e, CapStaff* cs, int idx)
                               }
                         else if (tag == "chord") {
                               ChordObj* chord = new ChordObj(this);
-                              chord->readCapx(e);
+                              chord->readCapx(e, ziachUsed);
                               v->objects.append(chord);
                               }
                         else if (tag == "rest") {
@@ -1211,6 +1252,8 @@ void Capella::readCapx(XmlReader& e)
       rightPageMargins = 0;
       btmPageMargins   = 0;
 
+      bool griffPush = false;
+
       // Now do the equivalent of:
       // readLayout(); (called only once)
       // readExtra();  (this is a NOP)
@@ -1236,7 +1279,7 @@ void Capella::readCapx(XmlReader& e)
                   e.skipCurrentElement();
                   }
             else if (tag == "pageObjects") {
-                  backgroundChord->readCapxObjectArray(e);
+                  backgroundChord->readCapxObjectArray(e, griffPush);
                   }
             else if (tag == "barCount") {
                   qDebug("importCapXml: found barCount (skipping)");

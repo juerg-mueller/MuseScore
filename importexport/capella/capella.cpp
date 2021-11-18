@@ -206,6 +206,8 @@ static void processBasicDrawObj(QList<BasicDrawObj*> objects, Segment* s, int tr
                                           case 'u':   // fermata up
                                                 addArticulationText(score, cr, track, SymId::fermataAbove);
                                                 break;
+                                          case 'T':
+                                          case 'K':
                                           case 'd':   // da capo D.C.
                                           case 'e':   // dal segno D.S.
                                           case 'n':   // segno coda
@@ -790,6 +792,8 @@ static Fraction readCapVoice(Score* score, CapVoice* cvoice, int staffIdx, const
 
                               chord->add(note);
                               note->setPitch(pitch);
+                              note->setHeadGroup(NoteHead::Group(n.headGroup));
+                              note->setColor(n.color);
                               // TODO: compute tpc from pitch & line
                               note->setTpcFromPitch();
                               if (o->rightTie) {
@@ -1413,6 +1417,8 @@ Capella::Capella()
       author   = 0;
       keywords = 0;
       comment  = 0;
+      griffPush = false;
+      ziachUsed = false;
       }
 
 Capella::~Capella()
@@ -1490,6 +1496,7 @@ void LineObj::read()
       pt2       = cap->readPoint();
       color     = cap->readColor();
       lineWidth = cap->readByte();
+      griffPush = lineWidth >= 5;
       // qDebug("LineObj: %f:%f  %f:%f  width %d", pt1.x(), pt1.y(), pt2.x(), pt2.y(), lineWidth);
       }
 
@@ -1728,6 +1735,7 @@ QList<BasicDrawObj*> Capella::readDrawObjectArray()
                         LineObj* o = new LineObj(this);
                         o->read();
                         ol.append(o);
+                        griffPush = o->griffPush;
                         }
                         break;
                   case  CapellaType::POLYGON: {
@@ -1908,7 +1916,7 @@ ChordObj::ChordObj(Capella* c)
 //   read
 //---------------------------------------------------------
 
-void ChordObj::read()
+void ChordObj::read(bool & griffPush)
       {
       stemDir      = StemDir::AUTO;
       dStemLength  = 0;
@@ -1919,6 +1927,7 @@ void ChordObj::read()
       beamShift    = 0;
       beamSlope    = 0;
 
+      griffPush = false;
       BasicDurationalObj::read();
 
       unsigned char flags = cap->readByte();
@@ -1976,9 +1985,19 @@ void ChordObj::read()
                   }
             unsigned char b = cap->readByte();
             n.headType      = b & 7;
+            n.headGroup     = 0;
+            if (n.headType == 6) {
+                  n.headType = 0;
+                  n.headGroup =  1;
+                  }
+
             n.alteration    = ((b >> 3) & 7) - 2;  // -2 -- +2
             if (b & 0x40)
                   n.explAlteration = 1;
+            if (cap->griffPush && cap->ziachUsed)
+                  n.color = 0x000000;
+            else
+                  n.color = 0x0000ff;
             n.silent = b & 0x80;
             qDebug("ChordObj::read() note pitch %d explAlt %d head %d alt %d silent %d",
                    n.pitch, n.explAlteration, n.headType, n.alteration, n.silent);
@@ -2194,6 +2213,8 @@ QFont Capella::readFont()
             QString face             = readQString();
 
             qDebug("Font <%s> size %d, weight %d", qPrintable(face), lfHeight, lfWeight);
+            if (face == "Ziach")
+              ziachUsed = true;
             QFont font(face);
             font.setPointSizeF(lfHeight / 1000.0);
             font.setItalic(lfItalic);
@@ -2509,7 +2530,7 @@ void Capella::readVoice(CapStaff* cs, int idx)
                   case CapellaNoteObjectType::PAGE_BKGR:
                         {
                         ChordObj* chord = new ChordObj(this);
-                        chord->read();
+                        chord->read(griffPush);
                         v->objects.append(chord);
                         }
                         break;
@@ -2715,7 +2736,7 @@ void Capella::read(QFile* fp)
 
       // qDebug("read backgroundChord");
       backgroundChord = new ChordObj(this);
-      backgroundChord->read();              // contains graphic objects on the page background
+      backgroundChord->read(griffPush);              // contains graphic objects on the page background
       // qDebug("read backgroundChord done");
       bShowBarCount    = readByte();        // Taktnumerierung zeigen
       barNumberFrame   = readByte();        // 0=kein, 1=Rechteck, 2=Ellipse

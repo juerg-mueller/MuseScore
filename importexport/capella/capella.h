@@ -244,10 +244,11 @@ class BasicDrawObj : public CapellaObj {
       bool background;
       int pageRange;
       CapellaType type;
+      bool griffPush;
 
       BasicDrawObj(CapellaType t, Capella* c)
          : CapellaObj(c), modeX(0), modeY(0), distY(0), flags(0),
-           nRefNote(0), nNotes(0), background(0), pageRange(0), type(t) {}
+           nRefNote(0), nNotes(0), background(0), pageRange(0), type(t), griffPush(false) {}
       void read();
       void readCapx(XmlReader& e);
       };
@@ -469,11 +470,12 @@ class SimpleTextObj : public BasicDrawObj {
       QString _text;
       QPointF relPos;
       unsigned char align;
-      QFont _font;
 
    public:
+      QFont _font;
+      QString griffCross;
       SimpleTextObj(Capella* c)
-         : BasicDrawObj(CapellaType::SIMPLE_TEXT, c), relPos(0, 0), align(0) {}
+         : BasicDrawObj(CapellaType::SIMPLE_TEXT, c), relPos(0, 0), align(0), griffCross("") {}
       void read();
       void readCapx(XmlReader& e);
       QString text() const { return _text; }
@@ -528,13 +530,14 @@ class BasicDurationalObj : public CapellaObj {
       int count;              // tuplet
       bool tripartite;
       bool isProlonging;
+      bool griffPush;
 
    public:
-      BasicDurationalObj(Capella* c) : CapellaObj(c) {}
+      BasicDurationalObj(Capella* c) : CapellaObj(c), griffPush(false) {}
       void read();
       void readCapx(XmlReader& e, unsigned int& fullm);
       void readCapxDisplay(XmlReader& e);
-      void readCapxObjectArray(XmlReader& e);
+      void readCapxObjectArray(XmlReader& e, bool & griffPush, QList<QString> * griffCross = NULL);
       Fraction ticks() const;
       bool invisible;
       QList<BasicDrawObj*> objects;
@@ -557,6 +560,8 @@ struct CNote {
       signed char pitch;
       int explAlteration;     // 1 force, 2 suppress
       int headType;
+      int headGroup;
+      int color;
       int alteration;
       int silent;
       };
@@ -577,13 +582,14 @@ class ChordObj : public BasicDurationalObj, public NoteObj {
       bool rightTie;
       char beamShift;
       char beamSlope;
+      QList<QString> griffCross;
 
    public:
       ChordObj(Capella*);
-      void read();
-      void readCapx(XmlReader& e);
+      void read(bool & griffPush);
+      void readCapx(XmlReader& e, bool & ziachUsed);
       void readCapxLyrics(XmlReader& e);
-      void readCapxNotes(XmlReader& e);
+      void readCapxNotes(XmlReader& e, bool ziachUsed);
       void readCapxStem(XmlReader& e);
       void readCapxArticulation(XmlReader& e);
       QList<Verse> verse;
@@ -714,6 +720,9 @@ class Capella {
       double smallLineDist;            // spatium unit in metric mm
       double normalLineDist;
       int topDist;
+      bool griffPush;
+      bool ziachUsed;
+
 // capx support
    private:
       void readCapxVoice(XmlReader& e, CapStaff*, int);
@@ -726,7 +735,7 @@ class Capella {
       void initCapxLayout();
    public:
       void readCapx(XmlReader& e);
-      QList<BasicDrawObj*> readCapxDrawObjectArray(XmlReader& e);
+      QList<BasicDrawObj*> readCapxDrawObjectArray(XmlReader& e, bool & griffPush, QList<QString> * griffCross);
       };
 
 
